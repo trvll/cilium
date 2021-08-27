@@ -1,0 +1,170 @@
+name: GinkgoGKE (ci-gke)
+
+# Any change in triggers needs to be reflected in the concurrency group.
+on:
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  # Structure:
+  # - Workflow name
+  # - Event type
+  # - A unique identifier depending on event type:
+  #   - schedule: SHA
+  #   - issue_comment: PR number
+  #   - pull_request: PR number
+  #
+  # This structure ensures a unique concurrency group name is generated for each
+  # type of testing:
+  # - schedule: {name} schedule {SHA}
+  # - issue_comment: {name} issue_comment {PR number}
+  # - pull_request: {name} pull_request {PR number}
+  #
+  # Note: for `issue_comment` triggers, we additionally need to filter out based
+  # on comment content, otherwise any comment will interrupt workflow runs.
+
+  group: |
+    ${{ github.workflow }}
+    ${{ github.event_name }}
+    ${{
+      (github.event_name == 'schedule' && github.sha) ||
+      (github.event_name == 'issue_comment' &&
+        (startsWith(github.event.comment.body, 'ci-gke') ||
+        startsWith(github.event.comment.body, 'test-me-please')) &&
+        github.event.issue.number) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number)
+    }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+  GKE_CLUSTER: backend-core-test 
+  GKE_ZONE: us-central1-c
+  check_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  check_changes:
+    name: Deduce required tests from code changes
+    if: |
+      (github.event_name == 'issue_comment' && (
+        startsWith(github.event.comment.body, 'ci-gke') ||
+        (startsWith(github.event.comment.body, 'test-me-please'))
+      )) ||
+      (github.event_name == 'schedule' && github.repository == 'accuknox/cilium-private') ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      tested: ${{ steps.tested-tree.outputs.src }}
+    steps:
+      - name: Retrieve pull request's base and head
+        if: ${{ github.event.issue.pull_request }}
+        id: pr
+        run: |
+          curl ${{ github.event.issue.pull_request.url }} > pr.json
+          echo "::set-output name=base::$(jq -r '.base.sha' pr.json)"
+          echo "::set-output name=head::$(jq -r '.head.sha' pr.json)"
+      # Because we run on issue comments, we need to checkout the code for
+      # paths-filter to work.
+      - name: Checkout code
+        if: ${{ github.event.issue.pull_request }}
+        uses: actions/checkout@5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f
+        with:
+          persist-credentials: false
+      - name: Check code changes
+        if: ${{ github.event.issue.pull_request }}
+        uses: dorny/paths-filter@b2feaf19c27470162a626bd6fa8438ae5b263721
+        id: tested-tree
+        with:
+          base: ${{ steps.pr.outputs.base }}
+          ref: ${{ steps.pr.outputs.head }}
+          filters: |
+            src:
+              - '!(test|Documentation)/**'
+  ci:
+    if: |
+      (github.event_name == 'issue_comment' && (
+        startsWith(github.event.comment.body, 'ci-gke') ||
+        (startsWith(github.event.comment.body, 'test-me-please') && (needs.check_changes.outputs.tested == 'true'))
+      )) ||
+      (github.event_name == 'schedule' && github.repository == 'accuknox/cilium-private') ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-18.04
+    needs: check_changes
+    steps:  
+    - name: Retrieve pull request's base and head
+      if: ${{ github.event.issue.pull_request }}
+      id: pr
+      run: |
+        curl ${{ github.event.issue.pull_request.url }} > pr.json
+        echo "::set-output name=base::$(jq -r '.base.sha' pr.json)"
+        echo "::set-output name=head::$(jq -r '.head.sha' pr.json)"
+    # Because we run on issue comments, we need to checkout the code for
+    # paths-filter to work.
+    - name: Checkout code
+      if: ${{ github.event.issue.pull_request }}
+      uses: actions/checkout@5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f
+      with:
+        persist-credentials: false
+    - name: Set up job variables
+      id: vars
+      run: |
+        if [ ${{ github.event.issue.pull_request || github.event.pull_request }} ]; then
+          PR_API_JSON=$(curl \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            ${{ github.event.issue.pull_request.url || github.event.pull_request.url }})
+          SHA=$(echo "$PR_API_JSON" | jq -r ".head.sha")
+          OWNER=$(echo "$PR_API_JSON" | jq -r ".number")
+        else
+          SHA=${{ github.sha }}
+          OWNER=${{ github.sha }}
+        fi
+
+        CILIUM_INSTALL_DEFAULTS="--cluster-name=${{ env.clusterName }} \
+          --agent-image=quay.io/${{ github.repository_owner }}/cilium-ci \
+          --operator-image=quay.io/${{ github.repository_owner }}/operator-generic-ci \
+          --version=${SHA} \
+          --wait=false \
+          --config monitor-aggregation=none"
+        HUBBLE_ENABLE_DEFAULTS="--relay-image=quay.io/${{ github.repository_owner }}/hubble-relay-ci \
+          --relay-version=${SHA}"
+        echo ::set-output name=cilium_install_defaults::${CILIUM_INSTALL_DEFAULTS}
+        echo ::set-output name=hubble_enable_defaults::${HUBBLE_ENABLE_DEFAULTS}
+        echo ::set-output name=sha::${SHA}
+        echo ::set-output name=owner::${OWNER}
+    - name: Wait for images to be available
+      timeout-minutes: 10
+      shell: bash
+      run: |
+        for image in cilium-ci operator-generic-ci hubble-relay-ci ; do
+          until curl --silent -f -lSL "https://hub.docker.com/v2/repositories/${{ github.repository_owner }}/$image/tags/${{ steps.vars.outputs.sha }}/images" &> /dev/null; do sleep 45s; done
+        done
+    - uses: actions/checkout@v2
+      with:
+        submodules: 'recursive'
+    # setup gcloud cli
+    - uses: google-github-actions/setup-gcloud@v0.2.0
+      with:
+        service_account_key: ${{ secrets.GKE_SA_KEY }}
+        project_id: ${{ secrets.GKE_PROJECT }}
+    # configure docker to use the gcloud command-line tool as a credential
+    # helper for authentication
+    - run: |-
+        gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE"
+    - uses: actions/setup-go@v2
+      with:
+        go-version: '^1.17.1' # the go version to download (if necessary) and use.
+    - run: |
+        wget https://get.helm.sh/helm-v3.7.0-linux-amd64.tar.gz
+        tar -zxvf helm-v3.7.0-linux-amd64.tar.gz
+        sudo mv linux-amd64/helm /usr/local/bin/helm
+        curl -ssfl https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sudo -E sh -s -- -b $(go env gopath)/bin v1.42.1
+        sudo apt-get update
+        sudo apt-get install -y apt-transport-https curl
+        curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+        sudo touch /etc/apt/sources.list.d/kubernetes.list
+        echo "deb http://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee -a /etc/apt/sources.list.d/kubernetes.list
+        sudo apt-get update && sudo apt-get install -y golang-ginkgo-dev jq golang-ginkgo-dev golang-gomega-dev kubectl=1.21.1-00
+        export NATIVE_CIDR="$(gcloud container clusters describe ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }}  --format 'value(clusterIpv4Cidr)')"
+        cd test && CNI_INTEGRATION=gke ginkgo --focus="K8s" --tags=integration_tests -- -cilium.provision=false -cilium.kubeconfig=`echo ~/.kube/config` -cilium.image="docker.io/accuknox/cilium-ci" -cilium.tag=${{ steps.vars.outputs.sha }} -cilium.operator-image="docker.io/accuknox/operator" -cilium.operator-tag=${{ steps.vars.outputs.sha }} -cilium.operator-suffix="-ci" -cilium.hubble-relay-image="docker.io/accuknox/hubble-relay-ci" -cilium.hubble-relay-tag=${{ steps.vars.outputs.sha }} -cilium.passCLIEnvironment=true
