@@ -62,6 +62,18 @@ type HeaderMatch struct {
 	// +kubebuilder:validation:Optional
 	Value string `json:"value,omitempty"`
 }
+type MatchJWT struct {
+	// Fields is a list of jwt_authN fields.
+	//
+	// +kubebuilder:validation:Optional
+
+	Issuer      string   `json:"issuer,omitempty"`
+	Audiences   []string `json:"audiences,omitempty"`
+	JwksUrl     string   `json:"jwksUrl,omitempty"`
+	Forward     bool     `json:"forward,omitempty"`
+	FromHeaders bool     `json:"fromHeaders,omitempty"`
+	FromParams  bool     `json:"fromParams,omitempty"`
+}
 
 // PortRuleHTTP is a list of HTTP protocol constraints. All fields are
 // optional, if all fields are empty or missing, the rule does not have any
@@ -122,6 +134,11 @@ type PortRuleHTTP struct {
 	//
 	// +kubebuilder:validation:Optional
 	AuditMode bool `json:"auditMode,omitempty"`
+
+	//
+	//
+	//
+	MatchJWT []*MatchJWT `json:"matchJWT,omitempty"`
 }
 
 // Sanitize sanitizes HTTP rules. It ensures that the path and method fields
@@ -161,5 +178,31 @@ func (h *PortRuleHTTP) Sanitize() error {
 		}
 	}
 
+	// and about matchJWT?
+
 	return nil
+}
+
+func (h *MatchJWT) Equal(o *MatchJWT) bool {
+	if !h.strSliceCmp(h.Audiences, o.Audiences) ||
+		h.Forward != o.Forward ||
+		h.FromHeaders != o.FromHeaders ||
+		h.FromParams != o.FromParams ||
+		h.Issuer != o.Issuer ||
+		h.JwksUrl != o.JwksUrl {
+		return false
+	}
+	return true
+}
+
+func (h *MatchJWT) strSliceCmp(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
