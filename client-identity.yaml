@@ -23,6 +23,13 @@ specs:
                 forward: true
                 fromHeaders: false
                 fromParams: false
+              - issuer: "https://dev-8as2ijf5.us.auth0.com/"
+                audiences:
+                  - 'thales-accuknox-3rd'
+                jwksUrl: "https://dev-8as2ijf5.us.auth0.com/.well-known/jwks.json"
+                forward: true
+                fromHeaders: false
+                fromParams: false
             
   
 

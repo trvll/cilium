@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -283,43 +284,61 @@ func (s *XDSServer) getHttpFilterChainProto(clusterName string, tls bool, jwt []
 		},
 	}
 
-	if jwt != nil { //if match jwt exist add a second filter in the chain
-		providerName := "auth0" //TO-DO: use issuer here as well?
+	//if match jwt exist add a second filter in the chain
+	if jwt != nil {
+		providerPrefix := "provdr"
 
+		providers := make(map[string]*envoy_config_jwt_authn.JwtProvider, len(jwt))
+
+		for i := range jwt {
+			providers[providerPrefix+strconv.Itoa(i)] = &envoy_config_jwt_authn.JwtProvider{
+				Issuer:    jwt[i].Issuer,
+				Audiences: jwt[i].Audiences,
+				JwksSourceSpecifier: &envoy_config_jwt_authn.JwtProvider_RemoteJwks{
+					RemoteJwks: &envoy_config_jwt_authn.RemoteJwks{
+						HttpUri: &envoy_config_core.HttpUri{
+							Uri: jwt[i].JwksUrl,
+							Timeout: &durationpb.Duration{
+								Seconds: 5,
+							},
+							HttpUpstreamType: &envoy_config_core.HttpUri_Cluster{Cluster: jwksClusterName}, //ingressTLSClusterName and egressTLSClusterName doesn't work
+						},
+						CacheDuration: &durationpb.Duration{
+							Seconds: 300,
+						},
+					},
+				},
+				Forward: jwt[i].Forward,
+			}
+		}
+
+		var requirements []*envoy_config_jwt_authn.JwtRequirement
+
+		for k := range providers {
+			requirements = append(requirements, &envoy_config_jwt_authn.JwtRequirement{
+				RequiresType: &envoy_config_jwt_authn.JwtRequirement_ProviderName{
+					ProviderName: k,
+				},
+			})
+		}
 		hcmConfig.HttpFilters = append(hcmConfig.HttpFilters, &envoy_config_http.HttpFilter{
 			Name: "envoy.filters.http.jwt_authn",
 			ConfigType: &envoy_config_http.HttpFilter_TypedConfig{
 				TypedConfig: toAny(&envoy_config_jwt_authn.JwtAuthentication{
-					Providers: map[string]*envoy_config_jwt_authn.JwtProvider{
-						providerName: {
-							//TO-DO: check  if we will support a list of diferent matchJWT
-							Issuer:    jwt[0].Issuer,
-							Audiences: jwt[0].Audiences,
-							JwksSourceSpecifier: &envoy_config_jwt_authn.JwtProvider_RemoteJwks{
-								RemoteJwks: &envoy_config_jwt_authn.RemoteJwks{
-									HttpUri: &envoy_config_core.HttpUri{
-										Uri: jwt[0].JwksUrl,
-										Timeout: &durationpb.Duration{
-											Seconds: 5,
-										},
-										HttpUpstreamType: &envoy_config_core.HttpUri_Cluster{Cluster: jwksClusterName},
-									},
-									CacheDuration: &durationpb.Duration{
-										Seconds: 300,
-									},
-								},
-							},
-							Forward: false,
-						},
-					},
+					Providers: providers,
 
 					Rules: []*envoy_config_jwt_authn.RequirementRule{
 						{
 							Match: &envoy_config_route.RouteMatch{PathSpecifier: &envoy_config_route.RouteMatch_Prefix{Prefix: "/"}},
 							RequirementType: &envoy_config_jwt_authn.RequirementRule_Requires{
 								Requires: &envoy_config_jwt_authn.JwtRequirement{
-									RequiresType: &envoy_config_jwt_authn.JwtRequirement_ProviderName{
-										ProviderName: providerName}}},
+									RequiresType: &envoy_config_jwt_authn.JwtRequirement_RequiresAny{
+										RequiresAny: &envoy_config_jwt_authn.JwtRequirementOrList{
+											Requirements: requirements,
+										},
+									},
+								},
+							},
 						},
 					},
 				}),
@@ -1063,7 +1082,7 @@ func createBootstrap(filePath string, nodeId, cluster string, xdsSock, egressClu
 						}},
 					},
 				},
-				{
+				{ // TODO: this cluster needs to be generalized. It's used to fetch from jwks url.
 					Name:                 jwksClusterName,
 					ConnectTimeout:       &duration.Duration{Seconds: connectTimeout, Nanos: 0},
 					ClusterDiscoveryType: &envoy_config_cluster.Cluster_Type{Type: envoy_config_cluster.Cluster_LOGICAL_DNS},
