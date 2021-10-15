@@ -4061,6 +4061,12 @@ spec:
                                         items:
                                           description: Parameters for supply envoy filter configuration.
                                           properties:
+                                            provider:
+                                              description: The provider to be used for jwks fetching.
+                                              enum:
+                                              - AUTH0
+                                              - GCP
+                                              type: string
                                             issuer:
                                               description: The issuer for given token.
                                               type: string

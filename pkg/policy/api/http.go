@@ -62,17 +62,32 @@ type HeaderMatch struct {
 	// +kubebuilder:validation:Optional
 	Value string `json:"value,omitempty"`
 }
+
+type ProviderSrvc string
+
+const (
+	ProviderAuth0 ProviderSrvc = "AUTH0"
+	ProviderGcp   ProviderSrvc = "GCP"
+)
+
+type JwksProviderCluster string
+
+const (
+	JwksProviderAuth0Cluster JwksProviderCluster = "Auth0_remote_jwks_fetching_cluster"
+	JwksProviderGcpCluster   JwksProviderCluster = "Gcp_remote_jwks_fetching_cluster"
+)
+
 type MatchJWT struct {
 	// Fields is a list of jwt_authN fields.
 	//
 	// +kubebuilder:validation:Optional
-
-	Issuer      string   `json:"issuer,omitempty"`
-	Audiences   []string `json:"audiences,omitempty"`
-	JwksUrl     string   `json:"jwksUrl,omitempty"`
-	Forward     bool     `json:"forward,omitempty"`
-	FromHeaders bool     `json:"fromHeaders,omitempty"`
-	FromParams  bool     `json:"fromParams,omitempty"`
+	Provider    ProviderSrvc `json:"provider,omitempty"`
+	Issuer      string       `json:"issuer,omitempty"`
+	Audiences   []string     `json:"audiences,omitempty"`
+	JwksUrl     string       `json:"jwksUrl,omitempty"`
+	Forward     bool         `json:"forward,omitempty"`
+	FromHeaders bool         `json:"fromHeaders,omitempty"`
+	FromParams  bool         `json:"fromParams,omitempty"`
 }
 
 // PortRuleHTTP is a list of HTTP protocol constraints. All fields are
@@ -184,12 +199,13 @@ func (h *PortRuleHTTP) Sanitize() error {
 }
 
 func (h *MatchJWT) Equal(o *MatchJWT) bool {
-	if !h.strSliceCmp(h.Audiences, o.Audiences) ||
+	if h.Provider != o.Provider ||
+		h.Issuer != o.Issuer ||
+		!h.strSliceCmp(h.Audiences, o.Audiences) ||
+		h.JwksUrl != o.JwksUrl ||
 		h.Forward != o.Forward ||
 		h.FromHeaders != o.FromHeaders ||
-		h.FromParams != o.FromParams ||
-		h.Issuer != o.Issuer ||
-		h.JwksUrl != o.JwksUrl {
+		h.FromParams != o.FromParams {
 		return false
 	}
 	return true

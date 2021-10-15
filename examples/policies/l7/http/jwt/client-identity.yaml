@@ -3,7 +3,7 @@ kind: CiliumNetworkPolicy
 metadata:
     name: "test-client-identity"
 specs:
-    - description: Simple policy for authorize requests by means of Jwt token authetication. 
+    - description: Simple policy for authorize requests by means of Jwt token authetication.
       endpointSelector:
         matchLabels:
           component: webserver
@@ -15,7 +15,8 @@ specs:
           rules:
             http:
             - matchJWT:
-              - issuer: "https://dev-8as2ijf5.us.auth0.com/"
+              - provider: AUTH0
+                issuer: "https://dev-8as2ijf5.us.auth0.com/"
                 audiences:
                   - 'thales-accuknox-1st'
                   - 'thales-accuknox-2nd'
@@ -30,7 +31,3 @@ specs:
                 forward: true
                 fromHeaders: false
                 fromParams: false
-            
-  
-
-        

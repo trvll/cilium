@@ -85,7 +85,6 @@ const (
 	ingressClusterName    = "ingress-cluster"
 	ingressTLSClusterName = "ingress-cluster-tls"
 	metricsListenerName   = "envoy-prometheus-metrics-listener"
-	jwksClusterName       = "jwks-cluster"
 	EnvoyTimeout          = 300 * time.Second // must be smaller than endpoint.EndpointGenerationTimeout
 )
 
@@ -286,12 +285,25 @@ func (s *XDSServer) getHttpFilterChainProto(clusterName string, tls bool, jwt []
 
 	//if match jwt exist add a second filter in the chain
 	if jwt != nil {
-		providerPrefix := "provdr"
+		var providerPrefix string
+		var jwksClusterName string
 
-		providers := make(map[string]*envoy_config_jwt_authn.JwtProvider, len(jwt))
+		jwtRecords := make(map[string]*envoy_config_jwt_authn.JwtProvider, len(jwt))
 
 		for i := range jwt {
-			providers[providerPrefix+strconv.Itoa(i)] = &envoy_config_jwt_authn.JwtProvider{
+			switch jwt[i].Provider {
+			case api.ProviderAuth0:
+				providerPrefix = string(api.ProviderAuth0)
+				jwksClusterName = string(api.JwksProviderAuth0Cluster)
+			case api.ProviderGcp:
+				providerPrefix = string(api.ProviderGcp)
+				jwksClusterName = string(api.JwksProviderGcpCluster)
+			default:
+				providerPrefix = string(api.ProviderAuth0)
+				jwksClusterName = string(api.JwksProviderAuth0Cluster)
+			}
+
+			jwtRecords[providerPrefix+strconv.Itoa(i)] = &envoy_config_jwt_authn.JwtProvider{
 				Issuer:    jwt[i].Issuer,
 				Audiences: jwt[i].Audiences,
 				JwksSourceSpecifier: &envoy_config_jwt_authn.JwtProvider_RemoteJwks{
@@ -299,12 +311,12 @@ func (s *XDSServer) getHttpFilterChainProto(clusterName string, tls bool, jwt []
 						HttpUri: &envoy_config_core.HttpUri{
 							Uri: jwt[i].JwksUrl,
 							Timeout: &durationpb.Duration{
-								Seconds: 5,
+								Seconds: 5, //TODO: Create config
 							},
-							HttpUpstreamType: &envoy_config_core.HttpUri_Cluster{Cluster: jwksClusterName}, //ingressTLSClusterName and egressTLSClusterName doesn't work
+							HttpUpstreamType: &envoy_config_core.HttpUri_Cluster{Cluster: jwksClusterName},
 						},
 						CacheDuration: &durationpb.Duration{
-							Seconds: 300,
+							Seconds: 300, //TODO: Create config
 						},
 					},
 				},
@@ -314,7 +326,7 @@ func (s *XDSServer) getHttpFilterChainProto(clusterName string, tls bool, jwt []
 
 		var requirements []*envoy_config_jwt_authn.JwtRequirement
 
-		for k := range providers {
+		for k := range jwtRecords {
 			requirements = append(requirements, &envoy_config_jwt_authn.JwtRequirement{
 				RequiresType: &envoy_config_jwt_authn.JwtRequirement_ProviderName{
 					ProviderName: k,
@@ -325,7 +337,7 @@ func (s *XDSServer) getHttpFilterChainProto(clusterName string, tls bool, jwt []
 			Name: "envoy.filters.http.jwt_authn",
 			ConfigType: &envoy_config_http.HttpFilter_TypedConfig{
 				TypedConfig: toAny(&envoy_config_jwt_authn.JwtAuthentication{
-					Providers: providers,
+					Providers: jwtRecords,
 
 					Rules: []*envoy_config_jwt_authn.RequirementRule{
 						{
@@ -1082,14 +1094,14 @@ func createBootstrap(filePath string, nodeId, cluster string, xdsSock, egressClu
 						}},
 					},
 				},
-				{ // TODO: this cluster needs to be generalized. It's used to fetch from jwks url.
-					Name:                 jwksClusterName,
+				{ // TODO: add other supported clusters
+					Name:                 string(api.JwksProviderAuth0Cluster),
 					ConnectTimeout:       &duration.Duration{Seconds: connectTimeout, Nanos: 0},
 					ClusterDiscoveryType: &envoy_config_cluster.Cluster_Type{Type: envoy_config_cluster.Cluster_LOGICAL_DNS},
 					DnsLookupFamily:      envoy_config_cluster.Cluster_V4_ONLY,
 					LbPolicy:             envoy_config_cluster.Cluster_ROUND_ROBIN,
 					LoadAssignment: &envoy_config_endpoint.ClusterLoadAssignment{
-						ClusterName: jwksClusterName,
+						ClusterName: string(api.JwksProviderAuth0Cluster),
 						Endpoints: []*envoy_config_endpoint.LocalityLbEndpoints{
 							{
 								LbEndpoints: []*envoy_config_endpoint.LbEndpoint{
@@ -1117,15 +1129,9 @@ func createBootstrap(filePath string, nodeId, cluster string, xdsSock, egressClu
 						Name: "envoy.transport_sockets.tls",
 						ConfigType: &envoy_config_core.TransportSocket_TypedConfig{
 							TypedConfig: toAny(&envoy_config_upstreamtlsctx.UpstreamTlsContext{
-								Sni: "dev-8as2ijf5.us.auth0.com",
 								CommonTlsContext: &envoy_config_upstreamtlsctx.CommonTlsContext{
 									ValidationContextType: &envoy_config_upstreamtlsctx.CommonTlsContext_ValidationContext{
 										ValidationContext: &envoy_config_upstreamtlsctx.CertificateValidationContext{
-											MatchSubjectAltNames: []*envoy_type_matcher.StringMatcher{
-												{
-													MatchPattern: &envoy_type_matcher.StringMatcher_Exact{Exact: "*.us.auth0.com"},
-												},
-											},
 											TrustedCa: &envoy_config_core.DataSource{Specifier: &envoy_config_core.DataSource_Filename{Filename: "/etc/ssl/certs/ca-certificates.crt"}},
 										},
 									},
