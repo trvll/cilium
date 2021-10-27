@@ -63,6 +63,10 @@ type HeaderMatch struct {
 	Value string `json:"value,omitempty"`
 }
 
+// when using a external identity provider envoy will need to fetch
+// a json file from service provider server. For that reason an upstream
+// cluster is necessary. The ProviderSrvc is used  to select the correct
+// cluster configuration accondingly with the used provider.
 type ProviderSrvc string
 
 const (
@@ -70,6 +74,10 @@ const (
 	ProviderGcp   ProviderSrvc = "GCP"
 )
 
+// cluster configurations to be used along with external identity providers.
+// all supported services should have its own cluster configuration. In the
+// future should be possible to use "Dynamic Forward Proxy" because today it's
+// not working as expected (alpha version).
 type JwksProviderCluster string
 
 const (
@@ -150,9 +158,11 @@ type PortRuleHTTP struct {
 	// +kubebuilder:validation:Optional
 	AuditMode bool `json:"auditMode,omitempty"`
 
+	// MatchJWT is list of identity providers used to authenticate
+	// and authorize requests on micro-segmentation basis using jwt
+	// tokens
 	//
-	//
-	//
+	// +kubebuilder:validation:Optional
 	MatchJWT []*MatchJWT `json:"matchJWT,omitempty"`
 }
 
